@@ -62,7 +62,7 @@ jobs:
           from pathlib import Path
           p = Path("qmk/keyboards/zuoya/gmk70/keyboard.json")
           data = json.loads(p.read_text())
-          data["usb"]["device_version"] = "0.0.15"
+          data["usb"]["device_version"] = "0.1.5"
           p.write_text(json.dumps(data, indent=2) + "\n")
           PY
 
