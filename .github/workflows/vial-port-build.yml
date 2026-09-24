@@ -1,0 +1,105 @@
+name: GMK70 Vial Port Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - vial-port
+    paths:
+      - "port/vial/**"
+      - ".github/workflows/vial-port-build.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/qmk/qmk_cli@sha256:16c4916e95b99bf88d27b15aec8db409ee17265d1710287fde248c6666508966
+
+    steps:
+      - name: Checkout port files
+        uses: actions/checkout@v4
+        with:
+          path: port-repo
+
+      - name: Checkout Vial QMK with Westberry wireless support
+        uses: actions/checkout@v4
+        with:
+          repository: gskycraig/VIAL_QMK
+          ref: f113268591e8899d3f1390b8af99c0748b206f5c
+          path: qmk
+          submodules: recursive
+
+      - name: Checkout known-buildable GMK70 source
+        uses: actions/checkout@v4
+        with:
+          repository: uk-taniyama/qmk_zuoya_gmk70
+          ref: 8d8055bfc864b36d41bbfb0bf9cd393e4c4b6e20
+          path: gmk70-reference
+
+      - name: Assemble GMK70 Vial tree
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf qmk/keyboards/zuoya/gmk70
+          mkdir -p qmk/keyboards/zuoya
+          cp -a gmk70-reference/keyboards/zuoya/gmk70 qmk/keyboards/zuoya/gmk70
+
+          rm -rf qmk/keyboards/zuoya/gmk70/keymaps/vial
+          mkdir -p qmk/keyboards/zuoya/gmk70/keymaps/vial
+          cp -a port-repo/port/vial/keymaps/vial/. qmk/keyboards/zuoya/gmk70/keymaps/vial/
+
+          # The buildable GMK70 port references the older generic linker path.
+          # Use the newer Westberry wireless framework, whose NKRO conversion
+          # matches the behavior seen in the official V15 firmware.
+          sed -i 's#keyboards/linker/wireless/wireless.mk#keyboards/westberry/wireless/wireless.mk#'             qmk/keyboards/zuoya/gmk70/post_rules.mk
+
+          # Keep the official V15 USB firmware version in the experimental port.
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path("qmk/keyboards/zuoya/gmk70/keyboard.json")
+          data = json.loads(p.read_text())
+          data["usb"]["device_version"] = "0.0.15"
+          p.write_text(json.dumps(data, indent=2) + "\n")
+          PY
+
+          cat qmk/keyboards/zuoya/gmk70/post_rules.mk
+          grep -A8 '"usb"' qmk/keyboards/zuoya/gmk70/keyboard.json
+
+      - name: Compile Vial firmware
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd qmk
+          git config --global --add safe.directory "$PWD"
+          qmk compile -kb zuoya/gmk70 -km vial 2>&1 | tee ../build.log
+
+      - name: Report firmware size and identifiers
+        if: always()
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd qmk
+          echo "=== firmware outputs ==="
+          find . -maxdepth 2 -type f \( -name '*.hex' -o -name '*.bin' -o -name '*.elf' -o -name '*.map' \) -print || true
+          echo "=== size ==="
+          find . -maxdepth 2 -type f \( -name '*gmk70*vial*.bin' -o -name '*gmk70*vial*.hex' \) -exec ls -lh {} \; || true
+
+      - name: Collect build outputs
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p artifact
+          cp build.log artifact/ 2>/dev/null || true
+          find qmk -maxdepth 2 -type f \( -name '*.hex' -o -name '*.bin' -o -name '*.elf' -o -name '*.map' \) -exec cp {} artifact/ \; || true
+
+      - name: Upload build outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gmk70-vial-port-build
+          path: artifact
+          if-no-files-found: warn
